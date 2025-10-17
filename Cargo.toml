@@ -1,0 +1,50 @@
+[package]
+name = "ethereum-mcp-server"
+version = "0.1.0"
+edition = "2021"
+
+description = "MCP server for Ethereum trading operations"
+license = "MIT"
+repository = "https://github.com/ljg-cqu/ethereum-mcp-server"
+
+[dependencies]
+alloy = { version = "0.1.2", features = ["full"] }
+alloy-transport-ws = "0.1.2"
+alloy-pubsub = "0.1.2"
+anyhow = "1.0"
+async-trait = "0.1"
+axum = "0.7"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+dotenvy = "0.15"
+futures = "0.3"
+mockall = "0.13"
+rust_decimal = { version = "1.36", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tower = { version = "0.5", features = ["limit"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "set-header"] }
+tower_governor = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+url = "2.5"
+http = "0.2"
+
+# Testing & Development
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.13"
+tempfile = "3.8"
+wiremock = "0.6"
+criterion = { version = "0.5", features = ["html_reports"] }
+reqwest = { version = "0.11", features = ["json"] }
+
+[features]
+test = []
+
+# Benchmark configuration
+[[bench]]
+name = "ethereum_operations"
+harness = false

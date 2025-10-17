@@ -1,0 +1,24 @@
+# Development environment for Ethereum MCP Server
+# This is optional - the server can run directly with cargo run
+
+version: '3.8'
+
+services:
+  # Main MCP server
+  mcp-server:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - ETHEREUM_RPC_URL=${ETHEREUM_RPC_URL}
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=3000
+      - RUST_LOG=debug
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
