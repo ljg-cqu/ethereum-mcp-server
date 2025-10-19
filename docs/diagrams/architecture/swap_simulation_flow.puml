@@ -1,0 +1,111 @@
+@startuml swap_simulation_flow
+!define RECTANGLE class
+
+skinparam backgroundColor #FEFEFE
+skinparam componentStyle uml2
+
+title Swap Simulation Flow - Literate Code Map
+
+rectangle "Client" as client #lightblue
+note right of client
+    **HTTP Request**
+    POST /
+    Content-Type: application/json
+
+    {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": "swap_tokens",
+            "arguments": {
+                "from_token": "0xA0b8...",
+                "to_token": "0x6B17...",
+                "amount": "1000",
+                "slippage_tolerance": "0.5"
+            }
+        },
+        "id": 42
+    }
+end note
+
+rectangle "axum router" as router #lightsalmon
+rectangle "server/http.rs\nhandle_jsonrpc()" as handle_jsonrpc #lightsalmon
+rectangle "server/http.rs\ndispatch_tool()" as dispatch_tool #lightsalmon
+rectangle "server/http.rs\nhandle_swap_tokens()" as handle_swap_tokens #lightsalmon
+
+note right of handle_swap_tokens
+    **Swap handler responsibilities**
+    • Parse `arguments.from_token` / `to_token` with `TokenAddress::from_hex`
+    • Parse `amount` via `TokenAmount::from_human_readable(..., 18)`
+    • Parse `slippage_tolerance` with `Decimal::from_str`
+    • Enforce `state.max_swap_amount`
+    • Call `state.swap_service.simulate_swap(&SwapParams)`
+    • On success → `jr_success`
+    • On error → `jr_error` (-32603)
+end note
+
+rectangle "services/swap.rs\nSwapService::simulate_swap()" as swap_service #lightpink
+note right of swap_service
+    Thin delegation layer that routes to
+    the injected `EthereumProvider::simulate_swap`
+    with `self.contracts`.
+end note
+
+rectangle "providers/mod.rs\nEthereumProvider::simulate_swap()`" as provider_trait #lightcyan
+rectangle "providers/circuit_breaker.rs\nCircuitBreaker::call()`" as circuit_breaker #orange
+rectangle "providers/ethereum.rs\nAlloyEthereumProvider::simulate_swap()`" as alloy_sim #lightcyan
+note right of alloy_sim
+    **Key steps**
+    1. Determine fee tier via `utils::get_common_fee_tier`
+    2. Build Uniswap V3 `quoteExactInputSingle` call
+    3. Fetch token decimals for `amount_out`
+    4. Convert between `Decimal` ↔ `U256`
+    5. Estimate gas & optional gas cost (EIP-1559)
+    6. Wrap RPC calls with circuit breaker + retry
+end note
+
+rectangle "Uniswap V3 Quoter" as quoter #lightgray
+rectangle "Uniswap V3 Router" as router_contract #lightgray
+rectangle "Ethereum RPC" as rpc #lightgray
+
+rectangle "JSON-RPC Response" as response #lightgreen
+note right of response
+    {
+      "jsonrpc": "2.0",
+      "result": {
+        "from_token": "0xA0b8...",
+        "to_token": "0x6B17...",
+        "amount_in": "1000",
+        "amount_out": "998.7",
+        "price_impact": "0.12",
+        "gas_estimate_units": "180000",
+        "gas_cost_eth": "0.012",
+        "route": "uniswap_v3"
+      },
+      "id": 42
+    }
+end note
+
+client --> router : HTTP POST /jsonrpc
+router --> handle_jsonrpc
+handle_jsonrpc --> dispatch_tool : method == "tools/call"
+dispatch_tool --> handle_swap_tokens : tool name == "swap_tokens"
+handle_swap_tokens --> swap_service : build `SwapParams`
+swap_service --> provider_trait : call provider
+provider_trait --> circuit_breaker
+circuit_breaker --> alloy_sim : execute_with_circuit
+alloy_sim --> quoter : quoteExactInputSingle
+alloy_sim --> router_contract : exactInputSingle (gas estimation)
+alloy_sim --> rpc : eth_call / eth_estimateGas
+handle_swap_tokens --> response : jr_success result
+response --> client : HTTP 200 JSON
+
+note as N1
+    **Highlights**
+    1. JSON-RPC tooling layer orchestrates all requests
+    2. Validation + limit enforcement happen before provider IO
+    3. Circuit breaker protects all RPC interactions
+    4. Response mirrors `SwapResult` fields from services layer
+end note
+
+@enduml

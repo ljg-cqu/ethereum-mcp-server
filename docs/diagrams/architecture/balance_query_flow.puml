@@ -1,0 +1,135 @@
+@startuml balance_query_flow
+!define RECTANGLE class
+
+skinparam backgroundColor #FEFEFE
+skinparam componentStyle uml2
+
+title Balance Query Flow - Literate Code Map
+
+rectangle "Client" as client #lightblue
+note right of client
+    **HTTP Request**
+    POST /
+    Content-Type: application/json
+
+    {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": "get_balance",
+            "arguments": {
+                "wallet_address": "0x742d...",
+                "token_contract_address": "0xA0b8..."
+            }
+        },
+        "id": 1
+    }
+end note
+
+rectangle "axum router" as router #lightsalmon
+rectangle "server/http.rs\nhandle_jsonrpc()" as handle_jsonrpc #lightsalmon
+note right of handle_jsonrpc
+    **JSON-RPC entry point**
+    $code async fn handle_jsonrpc(State(state): State<AppState>, Json(request): Json<Value>)
+    $code     -> Result<Json<Value>, StatusCode> {
+    $code     if let Err(e) = Validator::validate_jsonrpc_request(&request) {
+    $code         return Ok(jr_error(request.get("id"),
+    $code             JsonRpcError::invalid_request_with_message(&e.to_string())));
+    $code     }
+    $code
+    $code     match request.get("method").and_then(|m| m.as_str()) {
+    $code         Some("tools/list") => Ok(jr_success(id, tools_payload)),
+    $code         Some("tools/call") => dispatch_tool(&state, request.get("id"),
+    $code             request.get("params"))).await,
+    $code         _ => Ok(jr_error(id, JsonRpcError::method_not_found())),
+    $code     }
+    $code }
+end note
+
+rectangle "server/http.rs\ndispatch_tool()" as dispatch_tool #lightsalmon
+note right of dispatch_tool
+    **Tool routing**
+    Matches `params.name` and routes to
+    `handle_get_balance`, `handle_get_token_price`,
+    `handle_swap_tokens`, or
+    `handle_get_transaction_status`.
+end note
+
+rectangle "server/http.rs\nhandle_get_balance()" as handle_get_balance #lightsalmon
+note right of handle_get_balance
+    **Balance handler**
+    $code async fn handle_get_balance(
+    $code     state: &AppState,
+    $code     arguments: Option<&Value>,
+    $code     id: Option<&Value>
+    $code ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    $code     let wallet = Validator::validate_wallet_address(wallet_str)?;
+    $code     let token = arguments
+    $code         .and_then(|a| a.get("token_contract_address"))
+    $code         .and_then(|v| v.as_str())
+    $code         .map(Validator::validate_token_address)
+    $code         .transpose()?;
+    $code
+    $code     match state.balance_service
+    $code         .get_balance(&wallet, token.as_ref()).await {
+    $code         Ok(balance) => Ok(Json(success_payload(balance))),
+    $code         Err(e) => Err(classify(&wallet, token.as_ref(), e, id)),
+    $code     }
+    $code }
+end note
+
+rectangle "services/balance.rs\nBalanceService::get_balance()" as balance_service #lightpink
+note right of balance_service
+    `BalanceService` delegates to the
+    injected `EthereumProvider` based on
+    whether `token` is `None` (ETH) or `Some`
+    (ERC-20).
+end note
+
+rectangle "providers/mod.rs\nEthereumProvider::get_eth_balance()`" as provider_eth #lightcyan
+rectangle "providers/mod.rs\nEthereumProvider::get_erc20_balance()`" as provider_erc20 #lightcyan
+rectangle "providers/circuit_breaker.rs\nCircuitBreaker::call()`" as circuit_breaker #orange
+rectangle "providers/ethereum.rs\nAlloyEthereumProvider`" as alloy_provider #lightcyan
+rectangle "Ethereum RPC" as rpc #lightgray
+
+rectangle "JSON-RPC Response" as response #lightgreen
+note right of response
+    {
+      "jsonrpc": "2.0",
+      "result": {
+        "wallet_address": "...",
+        "token_address": "...",
+        "amount": {
+          "raw": "...",
+          "human_readable": "...",
+          "decimals": 6
+        },
+        "symbol": "USDC"
+      },
+      "id": 1
+    }
+end note
+
+client --> router : HTTP POST /jsonrpc
+router --> handle_jsonrpc : forward request
+handle_jsonrpc --> dispatch_tool : method == "tools/call"
+dispatch_tool --> handle_get_balance : tool "get_balance"
+handle_get_balance --> balance_service : async call
+balance_service --> provider_eth : when token is None
+balance_service --> provider_erc20 : when token is Some
+provider_eth --> circuit_breaker
+provider_erc20 --> circuit_breaker
+circuit_breaker --> alloy_provider : execute_with_circuit
+alloy_provider --> rpc : eth_getBalance / eth_call
+handle_get_balance --> response : jr_success(...)
+response --> client : HTTP 200 JSON
+
+note as N1
+    **Highlights**
+    1. JSON-RPC "tools/call" request envelope
+    2. Validators applied before service invocation
+    3. Circuit breaker protects provider RPC calls
+    4. Rich error payload includes retry hint
+end note
+
+@enduml

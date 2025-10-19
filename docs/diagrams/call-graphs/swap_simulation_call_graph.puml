@@ -1,0 +1,52 @@
+@startuml swap_simulation_call_graph
+title Swap Simulation Call Graph - Runtime Execution
+
+actor Client
+participant "http::handle_request()" as http_handler
+participant "handle_swap_tokens()" as swap_handler
+participant "SwapService::simulate_swap()" as swap_service
+participant "EthereumProvider::simulate_swap()" as provider
+participant "CircuitBreaker::call()" as circuit_breaker
+participant "AlloyEthereumProvider" as alloy_provider
+participant "Ethereum RPC" as eth_rpc
+
+== HTTP Request ==
+Client -> http_handler: POST /jsonrpc {"name": "swap_tokens", params}
+activate http_handler
+http_handler -> swap_handler: handle_swap_tokens(state, args, id)
+activate swap_handler
+
+== Validation ==
+swap_handler -> swap_handler: parse token addresses / amount / slippage
+note right: Uses `TokenAddress::from_hex`, `TokenAmount::from_human_readable`
+
+== Service Invocation ==
+swap_handler -> swap_service: simulate_swap(params)
+activate swap_service
+
+swap_service -> provider: simulate_swap(params, contracts)
+activate provider
+provider -> circuit_breaker: call(simulate_swap)
+activate circuit_breaker
+circuit_breaker -> alloy_provider: execute swap simulation
+activate alloy_provider
+alloy_provider -> eth_rpc: quoteExactInputSingle / estimateGas
+eth_rpc --> alloy_provider: SwapResult data
+deactivate alloy_provider
+circuit_breaker --> provider: Ok(SwapResult)
+deactivate circuit_breaker
+provider --> swap_service: SwapResult {amount_out, gas_estimate, route}
+deactivate provider
+
+swap_service --> swap_handler: SwapResult
+deactivate swap_service
+
+== Response ==
+swap_handler -> swap_handler: format swap payload
+swap_handler --> http_handler: JsonRpcResponse {amount_out, price_impact, gas_estimate}
+deactivate swap_handler
+
+http_handler --> Client: HTTP 200 OK {result}
+deactivate http_handler
+
+@enduml

@@ -153,6 +153,10 @@ make bench             # Performance benchmarks
 - **[Security Audit](docs/SECURITY_AUDIT_REPORT.md)** - Security findings
 - **[WebSocket Implementation](docs/WEBSOCKET_IMPLEMENTATION.md)** - WebSocket attempt details
 - **[Docker Deployment](docs/DOCKER_DEPLOYMENT.md)** - Container deployment guide
+- **[Literate Code Maps Overview](docs/LITERATE_CODE_MAPS_README.md)** - How to navigate architecture and flow diagrams
+- **[Call Graph Diagram Guide](docs/CALL_GRAPH_DIAGRAM_GUIDE.md)** - Comparison of diagram types and decision flow
+
+**Architecture Diagrams**: View PlantUML diagrams in `docs/diagrams/` or run `plantuml docs/diagrams/**/*.puml` to generate PNGs locally.
 
 ## 🔒 Security Status
 

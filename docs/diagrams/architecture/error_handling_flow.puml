@@ -1,0 +1,93 @@
+@startuml error_handling_flow
+title Error Handling and Classification Flow - Robust Error Management
+
+participant "Service Layer" as service
+participant "HTTP Handler" as http_handler
+participant "classify_error()" as error_classifier
+participant "Error Response Formatter" as error_formatter
+participant Client
+
+== Error Occurrence ==
+service -> service: Operation fails (RPC timeout, validation error, etc.)
+note right: Any service operation can fail
+
+service -> http_handler: Return Err(error)
+activate http_handler
+
+http_handler -> error_classifier: classify_error(&error)
+activate error_classifier
+
+== Error Classification Logic ==
+error_classifier -> error_classifier: Extract error message string
+error_classifier -> error_classifier: Convert to lowercase for pattern matching
+
+alt Timeout/Network Errors
+    error_classifier -> error_classifier: Check for "timeout" or "timed out"
+    error_classifier -> error_classifier: Check for "connection" or "network"
+    note right: Includes RPC timeouts, connection failures
+
+    error_classifier --> http_handler: (-32603, "Service temporarily unavailable", retry=true)
+
+else Validation Errors
+    error_classifier -> error_classifier: Check for "invalid" or "parse"
+    note right: Input validation failures, format errors
+
+    error_classifier --> http_handler: (-32602, "Invalid request parameters", retry=false)
+
+else Rate Limit Errors
+    error_classifier -> error_classifier: Check for "rate limit" or "too many"
+    note right: Rate limiting violations
+
+    error_classifier --> http_handler: (-32603, "Rate limit exceeded", retry=true)
+
+else Other Errors
+    error_classifier -> error_classifier: Default case for unknown errors
+    note right: Any other error type
+
+    error_classifier --> http_handler: (-32603, "Unable to process request", retry=true)
+end
+
+deactivate error_classifier
+
+== Enhanced Error Response ==
+http_handler -> error_formatter: Format error response with metadata
+activate error_formatter
+
+error_formatter -> error_formatter: Create JSON-RPC error structure
+error_formatter -> error_formatter: Add error code and message
+error_formatter -> error_formatter: Include data object with:
+error_formatter -> error_formatter: - retry_suggested flag
+error_formatter -> error_formatter: - error_type for debugging
+error_formatter -> error_formatter: - Additional context if available
+
+error_formatter --> http_handler: Formatted JsonRpcError
+deactivate error_formatter
+
+== Client Response ==
+http_handler -> http_handler: Always return HTTP 200 OK
+note right: JSON-RPC convention - errors in response body
+
+http_handler --> Client: HTTP 200 OK\n{\n  "jsonrpc": "2.0",\n  "error": {\n    "code": -32603,\n    "message": "Service temporarily unavailable",\n    "data": {\n      "retry_suggested": true,\n      "error_type": "rpc_timeout"\n    }\n  },\n  "id": 1\n}
+
+deactivate http_handler
+
+== Error Recovery Patterns ==
+note over Client, error_formatter
+    **Error Recovery Strategies:**
+    • **retry=true**: Client can safely retry
+    • **retry=false**: Client should fix input and retry
+    • **Rate limits**: Exponential backoff recommended
+    • **Network issues**: Circuit breaker may be open
+    • **Validation errors**: Check input parameters
+end note
+
+== Logging and Monitoring ==
+note over service, error_classifier
+    **Server-side Error Handling:**
+    • Full error logged with structured context
+    • Error metrics collected for monitoring
+    • Sensitive data sanitized from client responses
+    • Correlation IDs maintained for tracing
+end note
+
+@enduml

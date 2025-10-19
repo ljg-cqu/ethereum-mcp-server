@@ -1,0 +1,56 @@
+@startuml price_service_call_graph
+title Price Service Call Graph - Runtime Execution
+
+actor Client
+participant "http::handle_request()" as http_handler
+participant "handle_get_token_price()" as price_handler
+participant "TokenAddress::from_hex()" as parse_address
+participant "utils::resolve_token_address()" as resolve_symbol
+participant "PriceService::get_token_price()" as price_service
+participant "EthereumProvider::get_token_price()" as provider
+participant "CircuitBreaker::call()" as circuit_breaker
+participant "AlloyEthereumProvider" as alloy_provider
+participant "Ethereum RPC" as eth_rpc
+
+== HTTP Request ==
+Client -> http_handler: POST /jsonrpc {"name": "get_token_price", params}
+activate http_handler
+http_handler -> price_handler: handle_get_token_price(state, args, id)
+activate price_handler
+
+== Input Processing ==
+price_handler -> parse_address: TokenAddress::from_hex?(token_address)
+note right of parse_address: If provided, parse & validate hex address
+price_handler -> resolve_symbol: resolve_token_address(symbol, contracts)
+note right of resolve_symbol: Fallback when `token_symbol` is provided
+
+price_handler -> price_service: get_token_price(token_address)
+activate price_service
+
+== Service Invocation ==
+price_service -> provider: get_token_price(token, contracts)
+activate provider
+provider -> circuit_breaker: call(get_token_price)
+activate circuit_breaker
+ circuit_breaker -> alloy_provider: execute_with_circuit(...)
+ activate alloy_provider
+ alloy_provider -> eth_rpc: quoteExactInputSingle / Chainlink feed
+ eth_rpc --> alloy_provider: pricing data
+ deactivate alloy_provider
+circuit_breaker --> provider: Ok(TokenPrice)
+deactivate circuit_breaker
+provider --> price_service: TokenPrice {price_eth, price_usd, source}
+deactivate provider
+
+price_service --> price_handler: TokenPrice
+deactivate price_service
+
+== Response ==
+price_handler -> price_handler: format price payload
+price_handler --> http_handler: JsonRpcResponse {price_eth, price_usd, source}
+deactivate price_handler
+
+http_handler --> Client: HTTP 200 OK {result}
+deactivate http_handler
+
+@enduml

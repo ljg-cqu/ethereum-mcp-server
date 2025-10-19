@@ -22,3 +22,13 @@ Thumbs.db
 
 # Cargo lock file (uncomment if this is a library)
 /Cargo.lock
+
+# Python virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# Generated images (regenerate with plantuml *.puml)
+# *.png  # Uncomment to exclude PNGs from VCS

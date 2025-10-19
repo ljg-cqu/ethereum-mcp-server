@@ -1,0 +1,85 @@
+@startuml balance_query_call_graph
+title Balance Query Call Graph - Runtime Execution
+
+actor Client
+participant "http::handle_request()" as http_handler
+participant "handle_get_balance()" as get_balance_handler
+participant "Validator::validate_wallet_address()" as validator_wallet
+participant "Validator::validate_token_address()" as validator_token
+participant "BalanceService::get_balance()" as balance_service
+participant "EthereumProvider::get_eth_balance()" as provider_eth
+participant "EthereumProvider::get_erc20_balance()" as provider_erc20
+participant "CircuitBreaker::call()" as circuit_breaker
+participant "AlloyEthereumProvider" as alloy_provider
+participant "Ethereum RPC" as eth_rpc
+
+== HTTP Request ==
+Client -> http_handler: POST /jsonrpc {"name": "get_balance", params}
+activate http_handler
+http_handler -> get_balance_handler: handle_get_balance(state, args, id)
+activate get_balance_handler
+
+== Validation ==
+get_balance_handler -> validator_wallet: validate_wallet_address(wallet)
+note right of validator_wallet: `Validator::validate_wallet_address`
+get_balance_handler -> validator_token: validate_token_address?(token)
+note right of validator_token: Optional token validation
+
+== Service Dispatch ==
+get_balance_handler -> balance_service: get_balance(wallet, token?)
+activate balance_service
+
+alt Native ETH (token == None)
+    balance_service -> provider_eth: get_eth_balance(wallet)
+    activate provider_eth
+    provider_eth -> circuit_breaker: call(get_eth_balance)
+    activate circuit_breaker
+    circuit_breaker -> alloy_provider: provider.get_balance(wallet)
+    activate alloy_provider
+    alloy_provider -> eth_rpc: eth_getBalance
+    eth_rpc --> alloy_provider: balance U256
+    deactivate alloy_provider
+    circuit_breaker --> provider_eth: Ok(balance)
+    deactivate circuit_breaker
+    provider_eth --> balance_service: BalanceInfo {token=None, amount}
+    deactivate provider_eth
+else ERC20 token provided
+    balance_service -> provider_erc20: get_erc20_balance(wallet, token)
+    activate provider_erc20
+
+    provider_erc20 -> circuit_breaker: call(balanceOf)
+    activate circuit_breaker
+    circuit_breaker -> alloy_provider: IERC20.balanceOf(wallet)
+    activate alloy_provider
+    alloy_provider -> eth_rpc: eth_call(balanceOf)
+    eth_rpc --> alloy_provider: balance U256
+    deactivate alloy_provider
+    circuit_breaker --> provider_erc20: Ok(balance)
+    deactivate circuit_breaker
+
+    provider_erc20 -> circuit_breaker: call(decimals & symbol)
+    activate circuit_breaker
+    circuit_breaker -> alloy_provider: IERC20.decimals()/symbol()
+    activate alloy_provider
+    alloy_provider -> eth_rpc: eth_call
+    eth_rpc --> alloy_provider: metadata
+    deactivate alloy_provider
+    circuit_breaker --> provider_erc20: Ok(metadata)
+    deactivate circuit_breaker
+
+    provider_erc20 --> balance_service: BalanceInfo {token=Some(token), amount}
+    deactivate provider_erc20
+end alt
+
+balance_service --> get_balance_handler: BalanceInfo
+deactivate balance_service
+
+== Response ==
+get_balance_handler -> get_balance_handler: serde_json::to_value(result)
+get_balance_handler --> http_handler: JsonRpcResponse {result}
+deactivate get_balance_handler
+
+http_handler --> Client: HTTP 200 OK {"result": ...}
+deactivate http_handler
+
+@enduml

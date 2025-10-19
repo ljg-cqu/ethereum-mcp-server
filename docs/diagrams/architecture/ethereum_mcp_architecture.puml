@@ -1,0 +1,167 @@
+@startuml Ethereum MCP Server Architecture
+!define RECTANGLE class
+
+skinparam backgroundColor #FEFEFE
+skinparam componentStyle uml2
+
+title ethereum_mcp_architecture
+
+package "Entry Point" as main {
+    rectangle "main.rs" as main_rs #lightblue
+    note right of main_rs
+        **Entry Point**
+        $code fn main() -> Result<(), Box<dyn Error>> {
+        $code     initialize_logging();
+        $code     let config = load_config().await?;
+        $code     let app_state = initialize_services(&config).await?;
+        $code     start_server(&config, app_state).await
+        $code }
+    end note
+}
+
+package "Core Library" as lib {
+    rectangle "lib.rs" as lib_rs #lightgreen
+    note right of lib_rs
+        **Configuration & Types**
+        $code pub struct Config {
+        $code     pub ethereum_rpc_url: String,
+        $code     pub server_host: String,
+        $code     pub server_port: u16,
+        $code     wallet_private_key: String,
+        $code     // ... other fields
+        $code }
+    end note
+
+    rectangle "types/mod.rs" as types_rs #lightyellow
+    note right of types_rs
+        **Data Types**
+        $code pub struct BalanceInfo {
+        $code     pub wallet_address: WalletAddress,
+        $code     pub token_address: Option<TokenAddress>,
+        $code     pub amount: TokenAmount,
+        $code     pub symbol: String,
+        $code }
+    end note
+
+    rectangle "validation.rs" as validation_rs #lightcoral
+    note right of validation_rs
+        **Input Validation**
+        $code pub fn validate_address(address: &str) -> Result<(), ValidationError> {
+        $code     // Validate Ethereum address format
+        $code }
+    end note
+}
+
+package "Providers" as providers {
+    rectangle "providers/mod.rs" as provider_mod #lightcyan
+    note right of provider_mod
+        **Provider Interface**
+        $code #[async_trait]
+        $code pub trait EthereumProvider: Send + Sync {
+        $code     async fn get_eth_balance(&self, wallet: &WalletAddress) -> Result<BalanceInfo>;
+        $code     async fn get_erc20_balance(&self, wallet: &WalletAddress, token: &TokenAddress) -> Result<BalanceInfo>;
+        $code     // ... other methods
+        $code }
+    end note
+
+    rectangle "providers/ethereum.rs" as ethereum_rs #lightcyan
+    note right of ethereum_rs
+        **Ethereum RPC Client**
+        $code pub struct EthereumProviderImpl {
+        $code     provider: Arc<Provider<Http>>,
+        $code     signer: SignerMiddleware<...>,
+        $code     nonce_manager: Arc<NonceManager>,
+        $code     circuit_breaker: Arc<CircuitBreaker>,
+        $code }
+    end note
+
+    rectangle "providers/circuit_breaker.rs" as circuit_breaker #orange
+    rectangle "providers/nonce_manager.rs" as nonce_manager #orange
+}
+
+package "Services" as services {
+    rectangle "services/balance.rs" as balance_svc #lightpink
+    note right of balance_svc
+        **Balance Service**
+        $code pub struct BalanceService {
+        $code     pub ethereum_provider: Arc<dyn EthereumProvider>,
+        $code }
+        $code
+        $code impl BalanceServiceTrait for BalanceService {
+        $code     async fn get_balance(&self, wallet: &WalletAddress, token: Option<&TokenAddress>) -> Result<BalanceInfo> {
+        $code         match token {
+        $code             None => self.ethereum_provider.get_eth_balance(wallet).await,
+        $code             Some(token_addr) => self.ethereum_provider.get_erc20_balance(wallet, token_addr).await,
+        $code         }
+        $code     }
+        $code }
+    end note
+
+    rectangle "services/price.rs" as price_svc #lightpink
+    rectangle "services/swap.rs" as swap_svc #lightpink
+    rectangle "services/transaction_status.rs" as tx_status_svc #lightpink
+}
+
+package "Server" as server {
+    rectangle "server/http.rs" as http_server #lightsalmon
+    note right of http_server
+        **HTTP Server**
+        $code pub struct HttpServer {
+        $code     router: Router,
+        $code     host: String,
+        $code     port: u16,
+        $code }
+        $code
+        $code async fn handle_request(State(state): State<AppState>, Json(request): Json<Value>) -> Json<Value> {
+        $code     match request.get("method").and_then(|m| m.as_str()) {
+        $code         Some("get_balance") => handle_get_balance(state, request).await,
+        $code         // ... other methods
+        $code     }
+        $code }
+    end note
+
+    rectangle "server/jsonrpc.rs" as jsonrpc_rs #lightsalmon
+}
+
+rectangle "contracts.rs" as contracts_rs #lightgray
+note right of contracts_rs
+    **Contract Addresses & ABIs**
+    $code pub struct ContractAddresses {
+    $code     pub usdc: String,
+    $code     pub usdt: String,
+    $code     pub dai: String,
+    $code     pub weth: String,
+    $code     pub uniswap_v3_factory: String,
+    $code     // ... other contracts
+    $code }
+end note
+
+' Relationships
+main_rs --> lib_rs : uses
+lib_rs --> types_rs : defines
+lib_rs --> validation_rs : uses
+
+main_rs --> providers : initializes
+providers --> ethereum_rs : implements
+ethereum_rs --> circuit_breaker : uses
+ethereum_rs --> nonce_manager : uses
+
+main_rs --> services : initializes
+services --> balance_svc : contains
+services --> price_svc : contains
+services --> swap_svc : contains
+services --> tx_status_svc : contains
+
+balance_svc --> provider_mod : depends on
+price_svc --> provider_mod : depends on
+swap_svc --> provider_mod : depends on
+tx_status_svc --> provider_mod : depends on
+
+main_rs --> server : initializes
+server --> http_server : contains
+server --> jsonrpc_rs : contains
+http_server --> services : calls
+
+validation_rs --> types_rs : validates
+contracts_rs --> lib_rs : provides addresses
+@enduml

@@ -1,0 +1,52 @@
+@startuml transaction_status_call_graph
+title Transaction Status Call Graph - Runtime Execution
+
+actor Client
+participant "http::handle_request()" as http_handler
+participant "handle_get_transaction_status()" as status_handler
+participant "TransactionStatusService::get_transaction_status()" as status_service
+participant "EthereumProvider::get_transaction_status()" as provider
+participant "CircuitBreaker::call()" as circuit_breaker
+participant "AlloyEthereumProvider" as alloy_provider
+participant "Ethereum RPC" as eth_rpc
+
+== HTTP Request ==
+Client -> http_handler: POST /jsonrpc {"name": "get_transaction_status", params}
+activate http_handler
+http_handler -> status_handler: handle_get_transaction_status(state, args, id)
+activate status_handler
+
+== Validation ==
+status_handler -> status_handler: parse & validate transaction_hash
+note right: Uses `B256::from_str`
+
+== Service Invocation ==
+status_handler -> status_service: get_transaction_status(tx_hash)
+activate status_service
+
+status_service -> provider: get_transaction_status(tx_hash)
+activate provider
+provider -> circuit_breaker: call(get_transaction_status)
+activate circuit_breaker
+circuit_breaker -> alloy_provider: execute_with_circuit(...)
+activate alloy_provider
+alloy_provider -> eth_rpc: eth_getTransactionReceipt / eth_getTransactionByHash
+eth_rpc --> alloy_provider: TransactionStatusInfo
+deactivate alloy_provider
+circuit_breaker --> provider: Ok(TransactionStatusInfo)
+deactivate circuit_breaker
+provider --> status_service: TransactionStatusInfo
+deactivate provider
+
+status_service --> status_handler: TransactionStatusInfo
+deactivate status_service
+
+== Response ==
+status_handler -> status_handler: format status payload
+status_handler --> http_handler: JsonRpcResponse {status, confirmations, blockNumber}
+deactivate status_handler
+
+http_handler --> Client: HTTP 200 OK {result}
+deactivate http_handler
+
+@enduml

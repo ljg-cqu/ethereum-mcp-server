@@ -1,0 +1,79 @@
+@startuml http_request_processing_flow
+title HTTP Request Processing Flow - JSON-RPC Request Lifecycle
+
+actor Client
+participant "Axum Router" as router
+participant "handle_jsonrpc()" as jsonrpc_handler
+participant "Validator::validate_jsonrpc_request()" as jsonrpc_validator
+participant "jr_error() / jr_success()" as response_builder
+participant "Tool dispatcher" as tool_dispatch
+participant "Service handlers" as service_handlers
+
+== HTTP Request Arrival ==
+Client -> router: POST / {jsonrpc, method, params, id}
+router -> jsonrpc_handler: handle_jsonrpc(State<AppState>, Json<Value>)
+activate jsonrpc_handler
+
+== JSON-RPC Validation ==
+jsonrpc_handler -> jsonrpc_validator: validate_jsonrpc_request(&request)
+activate jsonrpc_validator
+
+alt Validation OK
+    jsonrpc_validator --> jsonrpc_handler: Ok(())
+    deactivate jsonrpc_validator
+else Validation error
+    jsonrpc_validator --> jsonrpc_handler: Err(validation_error)
+    deactivate jsonrpc_validator
+
+    jsonrpc_handler -> response_builder: jr_error(id, JsonRpcError::invalid_request_with_message(...))
+    activate response_builder
+    response_builder --> jsonrpc_handler: Json(error_payload)
+    deactivate response_builder
+
+    jsonrpc_handler --> Client: HTTP 200 {"error": {...}}
+    deactivate jsonrpc_handler
+end
+
+== Method Dispatch ==
+jsonrpc_handler -> jsonrpc_handler: method = request["method"].as_str()
+jsonrpc_handler -> tool_dispatch: match method
+activate tool_dispatch
+
+alt method == "tools/list"
+    tool_dispatch -> response_builder: jr_success(id, {"tools": [...]})
+    activate response_builder
+    response_builder --> tool_dispatch: Json(success_payload)
+    deactivate response_builder
+    tool_dispatch --> jsonrpc_handler: Json(success_payload)
+    deactivate tool_dispatch
+    jsonrpc_handler --> Client: HTTP 200 {"result": {...}}
+    deactivate jsonrpc_handler
+else method == "tools/call"
+    tool_dispatch -> tool_dispatch: extract tool name & arguments
+    tool_dispatch -> service_handlers: call handler by tool name
+    activate service_handlers
+
+    alt Handler returns Ok(Json<_>)
+        service_handlers --> tool_dispatch: Ok(Json(result))
+        deactivate service_handlers
+        tool_dispatch --> jsonrpc_handler: Json(result)
+        deactivate tool_dispatch
+        jsonrpc_handler --> Client: HTTP 200 {"result": {...}}
+        deactivate jsonrpc_handler
+    else Handler returns Err((StatusCode, Json(error)))
+        service_handlers --> tool_dispatch: Err((status, Json(error_payload)))
+        deactivate service_handlers
+        tool_dispatch --> jsonrpc_handler: Json(error_payload)
+        deactivate tool_dispatch
+        jsonrpc_handler --> Client: HTTP 200 {"error": {..., "data": {"retry_suggested": bool}}}
+        deactivate jsonrpc_handler
+    end
+
+else Unknown method
+    tool_dispatch --> jsonrpc_handler: jr_error(id, JsonRpcError::method_not_found())
+    deactivate tool_dispatch
+    jsonrpc_handler --> Client: HTTP 200 {"error": {"code": -32601}}
+    deactivate jsonrpc_handler
+end
+
+@enduml

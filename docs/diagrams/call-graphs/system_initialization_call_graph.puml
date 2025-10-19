@@ -1,0 +1,79 @@
+@startuml
+title System Initialization Call Graph - Runtime Execution
+
+actor Client
+participant "main()" as main_fn
+participant "run_application()" as run_app
+participant "initialize_logging()" as init_logging
+participant "load_config()" as load_config
+participant "initialize_services()" as init_services
+participant "ProviderFactory::create_ethereum_provider_with_failover()" as provider_factory
+participant "AlloyEthereumProvider::new()" as alloy_provider_new
+participant "BalanceService::new()" as balance_service
+participant "PriceService::new()" as price_service
+participant "SwapService::new()" as swap_service
+participant "TransactionStatusService::new()" as tx_status_service
+participant "AppState::new()" as app_state
+participant "HttpServer::new()" as http_server
+participant "HttpServer::start()" as server_start
+
+== Entry ==
+Client -> main_fn: main()
+activate main_fn
+main_fn -> run_app: run_application()
+activate run_app
+
+run_app -> init_logging: initialize_logging()
+
+== Configuration ==
+run_app -> load_config: load_config()
+activate load_config
+load_config -> load_config: Config::from_env()
+load_config -> load_config: Config::validate()
+load_config --> run_app: Config
+deactivate load_config
+
+== Service Initialization ==
+run_app -> init_services: initialize_services(&config)
+activate init_services
+
+init_services -> provider_factory: create_ethereum_provider_with_failover(config.ethereum_rpc_urls, config.wallet_private_key(), ...)
+activate provider_factory
+provider_factory -> alloy_provider_new: AlloyEthereumProvider::new(...)
+activate alloy_provider_new
+alloy_provider_new --> provider_factory: AlloyEthereumProvider
+deactivate alloy_provider_new
+provider_factory --> init_services: Arc<dyn EthereumProvider>
+deactivate provider_factory
+
+init_services -> balance_service: BalanceService::new(provider.clone())
+init_services -> price_service: PriceService::new(provider.clone(), config.contracts.clone())
+init_services -> swap_service: SwapService::new(provider.clone(), config.contracts.clone())
+init_services -> tx_status_service: TransactionStatusService::new(provider.clone())
+
+init_services -> app_state: AppState::new(balance, price, swap, tx_status, config.max_swap_amount)
+activate app_state
+app_state --> init_services: AppState
+deactivate app_state
+
+init_services --> run_app: AppState
+deactivate init_services
+
+== HTTP Server ==
+run_app -> http_server: HttpServer::new(config.server_host, config.server_port, AppState, config.http_timeout_seconds, ...)
+activate http_server
+http_server --> run_app: HttpServer
+deactivate http_server
+
+run_app -> server_start: HttpServer::start()
+activate server_start
+server_start -> server_start: axum::serve(listener, router)
+server_start --> run_app: Result<()> (await)
+deactivate server_start
+
+run_app --> main_fn: Result<()> (await)
+deactivate run_app
+main_fn --> Client: Result<()> (await)
+deactivate main_fn
+
+@enduml
